@@ -77,3 +77,38 @@ function exportCard(){
   message("Your companion card is ready!");
 }
 $("export-card").addEventListener("click",exportCard);
+
+const starField = $("star-field");
+let starScore = 0;
+let starTimer = null;
+function stopStars(){
+  if(starTimer !== null){clearInterval(starTimer);starTimer=null;}
+  starField.replaceChildren();
+  $("star-start").disabled = false;
+}
+$("star-start").addEventListener("click",()=>{
+  stopStars();
+  starScore=0;
+  $("star-score").textContent="0 / 5";
+  $("star-start").disabled=true;
+  message("Catch the stars before they disappear!");
+  let spawned=0;
+  starTimer=setInterval(()=>{
+    if(spawned++>=12){stopStars();message(starScore>=5?"Amazing! Hermie is dancing!":"Try again, you can do it!");return}
+    const star=document.createElement("button");
+    star.type="button";star.className="catch-star";star.textContent="✦";
+    star.style.left=(8+Math.random()*78)+"%";
+    star.style.top=(12+Math.random()*65)+"%";
+    star.setAttribute("aria-label","Catch star");
+    star.addEventListener("click",()=>{
+      if(!star.isConnected)return;
+      star.remove();starScore++;
+      $("star-score").textContent=starScore+" / 5";
+      if(starScore>=5){stopStars();celebrate();message("Five stars! Hermie is dancing! ✦")}
+    });
+    starField.append(star);
+    setTimeout(()=>star.remove(),2200);
+  },750);
+});
+$("plant").addEventListener("click",()=>{ $("bubble").textContent="I water this plant! 🌿";message("Hermie loves taking care of the little plant."); });
+$("pet").addEventListener("click",()=>{celebrate();$("bubble").textContent="Boop! ♡";});
