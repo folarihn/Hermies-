@@ -1,5 +1,5 @@
 name: hermie
-version: "0.1.0"
+version: "0.2.0"
 description: A playful, local virtual pet that grows with Hermes activity
 author: folarihn
 requires_hermes: ">=0.20.0"
