@@ -39,6 +39,13 @@ class HermieTests(unittest.TestCase):
             self.pet.interact("rename", "../secret")
         self.assertEqual(self.pet.interact("rename", "Pixel")["name"], "Pixel")
 
+    def test_session_start_does_not_reset_tool_cooldown(self):
+        self.pet.observe("tool_completed")
+        first = self.pet.status()["xp"]
+        self.pet.observe("session_start")
+        self.pet.observe("tool_completed")
+        self.assertEqual(first, self.pet.status()["xp"])
+
     def test_tool_observation_cooldown(self):
         self.pet.observe("tool_completed")
         first = self.pet.status()["xp"]
