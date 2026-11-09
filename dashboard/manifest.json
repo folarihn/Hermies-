@@ -1,0 +1,11 @@
+{
+  "name": "hermie",
+  "label": "Hermie",
+  "description": "A tiny companion that grows with your agent.",
+  "icon": "Heart",
+  "version": "0.3.0",
+  "tab": { "path": "/hermie", "position": "end" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

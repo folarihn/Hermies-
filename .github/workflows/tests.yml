@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +17,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Python unit tests
         run: python -m unittest discover -s tests -v
-      - name: Check browser JavaScript syntax
-        run: node --check web/app.js
-      - name: Compile plugin
-        run: python -m compileall -q hermie.py hermie_cli.py hermie_web.py
+      - name: Dashboard bundle is up to date
+        run: python tools/build_dashboard.py --check
+      - name: Check JavaScript syntax
+        run: node --check web/hermie-view.js && node --check web/app.js && node --check dashboard/dist/index.js
+      - name: Compile Python
+        run: python -m compileall -q hermie.py hermie_plugin.py hermie_cli.py hermie_web.py dashboard tools

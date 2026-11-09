@@ -2,50 +2,74 @@
 
 **A tiny virtual companion that grows with your Hermes agent.**
 
-Hermie is an early open-source Hermes plugin. It stores a pet locally in SQLite, reacts to supported Hermes lifecycle events, and lets you feed, play with, rest, and rename your pet. This is an **early playable prototype** with a local animated pixel-art room. The art, host integration and gameplay will continue to evolve.
+Hermie is a plugin for [Hermes Agent](https://hermes-agent.nousresearch.com). It keeps a pixel-art pet on your machine that earns XP while your agent works, gets hungry while you are away, and grows from a Hatchling into an Explorer and then a Companion.
 
-## What works today
-
-- Local persistent pet state, XP, level, energy, happiness, bond and snacks
-- Hatchling → Explorer → Companion stages
-- Session start/end hooks and conservative tool-completion observation
-- A 20-second XP cooldown to prevent farming from rapid tool calls
-- CLI actions for feeding, playing, resting and renaming\n- Local browser game with animated CSS pixel pet, mood meters, interactions, a star-catching mini-game, clickable room objects, and SVG companion-card export\n- Hermes chat command: `/hermie status|feed|play|rest|rename NAME` (requires host support)
-- No network calls or telemetry in the pet engine
-
-**Important:** XP for tool completion is awarded when Hermes emits `post_tool_call`, unless the result explicitly indicates an error. This is an observed tool operation, not proof of task success. Hermes host versions may represent outcomes differently; integration verification is still required. The `tasks` field counts observed successful tool operations, not completed user tasks.
+Everything is local: one SQLite file, no network calls, no telemetry. Hermie stores counters and event kinds only. It never stores chat text, tool names, tool arguments or tool output.
 
 ## Install
 
-Requires Python 3.11+ and a compatible Hermes installation. In a disposable Hermes profile:
+Requires Python 3.11+ and Hermes Agent 0.20 or newer.
 
 ```bash
-hermes plugins install https://github.com/folarihn/Hermies-.git --enable
-hermes plugins list
+hermes plugins install folarihn/Hermies- --enable
 ```
 
-Restart Hermes. Plugin loading and hooks must be checked on your installed Hermes version. This initial code has not yet completed end-to-end host testing.
+Restart Hermes. Your pet hatches the first time a session starts.
 
-## Open the pixel-art home\n\nFrom the repository checkout, run:\n\n```bash\npython hermie_web.py\n```\n\nOpen the **private local URL** printed in the terminal. The server binds to `127.0.0.1:8766` and requires a randomly generated token for its API. Keep the link private and do not expose the service through a public reverse proxy. The browser stores the token only in the current tab session.\n\nThe game works without remote assets, external services, or telemetry. You can export a shareable SVG pet card.\n\n## Play locally
+## Where Hermie lives
 
-Clone the repository, then:
+| Where | How |
+| --- | --- |
+| In a chat session | `/hermie`, `/hermie feed`, `/hermie play`, `/hermie rest`, `/hermie rename Pixel` |
+| In your terminal | `hermes hermie`, plus `feed`, `play`, `rest`, `rename NAME`, `log`, `--json` |
+| In the Hermes dashboard | A **Hermie** tab with the animated room (`hermes dashboard`) |
+| On its own page | `hermes hermie web` prints a private local link |
+
+## How the game works
+
+**Earning.** A tool call that finishes cleanly earns 3 XP, at most once every 20 seconds, so tool loops cannot farm it. Errored and blocked tool calls earn nothing. Every fifth tool earns a snack. Your first session of each day adds to a streak, a snack and some bond.
+
+**Needs.** Fullness and happiness drain slowly while you are away (a full pet is hungry after about a day). Energy comes back on its own and is spent by playing and working. Nothing ever dies: a hungry or exhausted pet just earns XP at half speed until you look after it.
+
+**Caring.** Feed spends a snack. Play costs energy and has a one-minute cooldown. Rest restores energy and has a ten-minute cooldown.
+
+**Growing.** Each level needs 50 XP more than the one before. Hatchling until level 4, Explorer until level 10, then Companion, each with its own sprite. Personality follows what your agent does most: building things makes a Tinkerer, research makes a Scholar, and messaging and delegating make a Socialite.
+
+**Honest limits.** XP reflects tool calls that Hermes reported as `ok`. That is not proof your task succeeded. The star-catching mini-game is cosmetic and awards nothing.
+
+## Where state is stored
+
+`$HERMIE_HOME/pet.sqlite3` if `HERMIE_HOME` is set, otherwise `hermie/pet.sqlite3` inside the active Hermes home, so each Hermes profile has its own pet. Delete the file to start over.
+
+## The standalone page
+
+`hermes hermie web` (or `python hermie_web.py` from a checkout) serves the room at `127.0.0.1:8766`. It only listens on your own machine, requires the random token in the printed link, and rejects cross-origin writes. Do not put it behind a public reverse proxy. Set `HERMIE_PORT` or pass `--port` to change the port.
+
+## Development
+
+No dependencies and no build tooling beyond Python and Node (for a syntax check).
 
 ```bash
-python hermie_cli.py status
-python hermie_cli.py feed
-python hermie_cli.py play
-python hermie_cli.py rest
-python hermie_cli.py rename Pixel
+python -m unittest discover -s tests -v
+python tools/build_dashboard.py --check
+node --check web/hermie-view.js
 ```
 
-State lives in `$HERMIE_HOME/pet.sqlite3` if set, otherwise `$HERMES_HOME/hermie/pet.sqlite3`, otherwise `~/.hermes/hermie/pet.sqlite3`. No external Python dependencies are required.
+Layout:
 
-## Test checklist\n\nRun `python -m unittest discover -s tests -v` and `node --check web/app.js`. Then start `python hermie_web.py` and open the tokenized URL from the terminal. Verify feeding, play cooldown, rest, renaming, pet card export, clicking the plant, and catching five stars. Restart the server and confirm pet progress persists. Test `/hermie status` separately inside Hermes. The browser mini-game is cosmetic and does not award XP, preventing easy reward farming.\n\n## Roadmap
+- `hermie.py`: the pet engine. All game rules live here.
+- `hermie_plugin.py`: the Hermes adapter (hooks, `/hermie`, `hermes hermie`).
+- `hermie_cli.py`, `hermie_web.py`: terminal and standalone web front ends.
+- `web/`: the room UI. `hermie-view.js` is shared by the standalone page and the dashboard tab.
+- `dashboard/`: the Hermes dashboard tab. `dist/` is generated by `python tools/build_dashboard.py` and committed, because Hermes installs plugins straight from git without a build step. Rebuild after editing `web/` or `dashboard/src/`.
 
-- Verify Hermes lifecycle hook payloads on supported host versions
-- Add chat commands and a small browser-based pixel-art home
-- Add pet animations, collectibles and evolution artwork
-- Add exportable companion cards
-- Tests, CI, and a short playable hackathon demo
+To try a checkout against a throwaway Hermes home:
 
-No private chat text, tool arguments or tool output is stored by this prototype. The pet tracks only aggregate progress and minimal local event types. The plugin does not grant tools permissions or modify the agent's work.
+```bash
+HERMES_HOME=/tmp/hermes-test hermes plugins install file:///path/to/checkout --enable
+HERMES_HOME=/tmp/hermes-test hermes hermie
+```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
