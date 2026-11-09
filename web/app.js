@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-let token = "";
+let token = "";\nlet currentPet = null;
 const hash = new URLSearchParams(location.hash.slice(1));
 if (hash.has("token")) {
   token = hash.get("token") || "";
@@ -11,7 +11,7 @@ if (hash.has("token")) {
 }
 const phrases = ["Nice to see you! ♡", "Let's make something!", "What a cozy day ✦", "I like it here!"];
 function message(s){ $("message").textContent = s; }
-function render(p){
+function render(p){\n  currentPet = p;
   $("pet-name").textContent = p.name;
   $("stage").textContent = p.stage.toUpperCase();
   $("level").textContent = "LVL " + String(p.level).padStart(2,"0");
@@ -62,3 +62,16 @@ $("rename-button").addEventListener("click",async()=>{
 });
 request().catch(e=>message("Unable to load pet: "+e.message+". Open the private link printed by the server."));
 setInterval(()=>request().catch(()=>{}),15000);
+
+function exportCard(){
+  if(!currentPet){message("Pet is not loaded yet");return}
+  const p=currentPet;
+  const safe = s=>String(s).replace(/[&<>"']/g, ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[ch]));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500"><rect width="900" height="500" rx="28" fill="#181325"/><rect x="22" y="22" width="856" height="456" rx="20" fill="#2a203e" stroke="#bd85b6" stroke-width="3"/><circle cx="235" cy="250" r="140" fill="#6e4c77"/><rect x="155" y="170" width="160" height="155" rx="35" fill="#ffbb7c" stroke="#d87f73" stroke-width="13"/><circle cx="205" cy="225" r="12" fill="#35243e"/><circle cx="264" cy="225" r="12" fill="#35243e"/><path d="M215 269 Q235 292 255 269" fill="none" stroke="#743b5c" stroke-width="8"/><text x="420" y="105" fill="#f9b881" font-family="monospace" font-size="24">HERMIE · COMPANION CARD</text><text x="420" y="195" fill="#fff0df" font-family="monospace" font-size="46">${safe(p.name)}</text><text x="420" y="247" fill="#e7b5fa" font-family="monospace" font-size="25">${safe(p.stage)} · LEVEL ${p.level}</text><text x="420" y="307" fill="#fff0df" font-family="monospace" font-size="24">${safe(p.personality)}</text><text x="420" y="362" fill="#d9c3d9" font-family="monospace" font-size="21">XP ${p.xp}   BOND ${p.bond}   SNACKS ${p.snacks}</text><text x="420" y="430" fill="#a99bb8" font-family="monospace" font-size="17">A LITTLE WORLD FOR HERMES AGENTS</text></svg>`;
+  const blob = new Blob([svg],{type:"image/svg+xml"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download="hermie-companion.svg";a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  message("Your companion card is ready!");
+}
+$("export-card").addEventListener("click",exportCard);
