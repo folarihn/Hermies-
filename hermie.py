@@ -6,18 +6,23 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(os.environ.get("HERMIE_HOME", str(Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hermie")))
 _LOCK = threading.RLock()
 INITIAL = {"name": "Hermie", "xp": 0, "energy": 80, "happiness": 75, "bond": 0, "snacks": 3, "last_seen": 0, "last_tool": 0, "last_play": 0, "tasks": 0, "curiosity": 0, "craft": 0}
 
+@contextmanager
 def _connect():
     ROOT.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(ROOT / "pet.sqlite3", timeout=10)
     db.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     db.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL)")
-    return db
+    try:
+        yield db
+    finally:
+        db.close()
 
 def _read(db):
     row = db.execute("SELECT value FROM state WHERE key='pet'").fetchone()
