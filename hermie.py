@@ -83,6 +83,7 @@ def observe(kind):
             return
         if kind == "tool_completed":
             p["xp"] += 3
+            p["last_tool"] = now
             p["tasks"] += 1  # completed tool operations, not completed user tasks
             p["energy"] = max(0, p["energy"] - 1)
             if p["tasks"] % 5 == 0:
