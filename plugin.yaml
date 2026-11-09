@@ -1,8 +1,7 @@
 name: hermie
-version: "0.2.0"
-description: A playful, local virtual pet that grows with Hermes activity
+version: "0.3.0"
+description: A tiny local companion that grows with your Hermes agent
 author: folarihn
-requires_hermes: ">=0.20.0"
 provides_hooks:
   - on_session_start
   - on_session_end

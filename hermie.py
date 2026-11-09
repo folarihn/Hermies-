@@ -1,148 +1,333 @@
-"""Hermie: a local, privacy-conscious virtual companion for Hermes."""
+"""Hermie pet engine: local state, time-based needs and activity rewards.
+
+Everything here is local. No network calls, no telemetry, and no chat text,
+tool arguments or tool output is ever stored: only counters and event kinds.
+"""
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
-import threading
 import time
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
-ROOT = Path(os.environ.get("HERMIE_HOME", str(Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hermie")))
-_LOCK = threading.RLock()
-INITIAL = {"name": "Hermie", "xp": 0, "energy": 80, "happiness": 75, "bond": 0, "snacks": 3, "last_seen": 0, "last_tool": 0, "last_play": 0, "tasks": 0, "curiosity": 0, "craft": 0}
+VERSION = "0.3.0"
+ACTIONS = ("feed", "play", "rest", "rename")
+
+# Needs change slowly while you are away. Nothing ever dies; a neglected pet
+# is just hungry and glum, and earns XP at half speed until cared for.
+FULLNESS_PER_HOUR = 4.0   # full -> empty in about a day
+HAPPINESS_PER_HOUR = 2.0  # doubled while the pet is starving
+ENERGY_PER_HOUR = 3.0     # energy comes back on its own
+MAX_AWAY_SECONDS = 72 * 3600
+
+TOOL_COOLDOWN = 20
+PLAY_COOLDOWN = 60
+REST_COOLDOWN = 600
+SESSION_COOLDOWN = 600
+MAX_SNACKS = 20
+MAX_EVENTS = 200
+
+INITIAL = {
+    "name": "Hermie",
+    "xp": 0,
+    "energy": 80.0,
+    "happiness": 75.0,
+    "fullness": 70.0,
+    "bond": 0,
+    "snacks": 3,
+    "tasks": 0,
+    "craft": 0,
+    "curiosity": 0,
+    "social": 0,
+    "streak": 0,
+    "last_day": 0,
+    "last_seen": 0,
+    "last_tool": 0,
+    "last_play": 0,
+    "last_rest": 0,
+    "last_session": 0,
+    "last_tick": 0,
+}
+
+# Tool-name prefixes -> the trait that tool use nudges. Only the counter is
+# stored, never the tool name.
+_TRAITS = (
+    ("curiosity", ("web_", "browser_", "x_search", "session_search", "vision_",
+                   "video_analyze", "read_", "search_", "skill_view", "skills_list")),
+    ("craft", ("terminal", "execute_code", "process", "write_", "patch",
+               "skill_manage", "image_generate", "video_generate", "computer_use",
+               "project_", "todo", "cronjob", "text_to_speech")),
+    ("social", ("delegate_task", "clarify", "memory", "discord", "send_",
+                "kanban_", "react_", "yb_", "feishu_", "ha_")),
+)
+_PERSONALITIES = {"craft": "Tinkerer", "curiosity": "Scholar", "social": "Socialite"}
+
+
+def _now():
+    return time.time()
+
+
+def home() -> Path:
+    """Where the pet lives: $HERMIE_HOME, else <active Hermes home>/hermie."""
+    override = os.environ.get("HERMIE_HOME", "").strip()
+    if override:
+        return Path(override)
+    try:
+        from hermes_constants import get_hermes_home  # profile-aware inside Hermes
+        return Path(get_hermes_home()) / "hermie"
+    except Exception:
+        base = os.environ.get("HERMES_HOME", "").strip()
+        return (Path(base) if base else Path.home() / ".hermes") / "hermie"
+
 
 @contextmanager
-def _connect():
-    ROOT.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(ROOT / "pet.sqlite3", timeout=10)
-    db.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    db.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL)")
+def _txn():
+    """One atomic read-modify-write. The agent, the CLI and the web UI are
+    separate processes, so the write lock must live in SQLite, not in Python."""
+    root = home()
+    root.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(root / "pet.sqlite3", timeout=10, isolation_level=None)
     try:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        db.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL)")
         yield db
+        db.execute("COMMIT")
+    except BaseException:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
     finally:
         db.close()
 
-def _read(db):
-    row = db.execute("SELECT value FROM state WHERE key='pet'").fetchone()
-    return {**INITIAL, **json.loads(row[0])} if row else dict(INITIAL)
 
-def _save(db, pet, kind, detail=""):
+def _clamp(value):
+    return max(0.0, min(100.0, float(value)))
+
+
+def _read(db, now):
+    row = db.execute("SELECT value FROM state WHERE key='pet'").fetchone()
+    pet = dict(INITIAL)
+    if row:
+        try:
+            stored = json.loads(row[0])
+        except ValueError:
+            stored = {}
+        if isinstance(stored, dict):
+            pet.update({k: v for k, v in stored.items() if k in INITIAL})
+    _tick(pet, now)
+    return pet
+
+
+def _tick(pet, now):
+    """Apply the needs that changed since the pet was last looked at."""
+    last = pet["last_tick"]
+    pet["last_tick"] = now
+    if not last:
+        return  # brand-new or pre-0.3 pet: start the clock now
+    hours = min(max(0.0, now - last), MAX_AWAY_SECONDS) / 3600
+    pet["fullness"] = _clamp(pet["fullness"] - FULLNESS_PER_HOUR * hours)
+    glum = HAPPINESS_PER_HOUR * (2 if pet["fullness"] <= 0 else 1)
+    pet["happiness"] = _clamp(pet["happiness"] - glum * hours)
+    pet["energy"] = _clamp(pet["energy"] + ENERGY_PER_HOUR * hours)
+
+
+def _save(db, pet, events, now):
     db.execute("INSERT OR REPLACE INTO state(key,value) VALUES('pet',?)", (json.dumps(pet),))
-    db.execute("INSERT INTO events(ts,kind,detail) VALUES(?,?,?)", (int(time.time()), kind, detail))
-    db.commit()
+    for kind, detail in events:
+        db.execute("INSERT INTO events(ts,kind,detail) VALUES(?,?,?)", (int(now), kind, str(detail)))
+    db.execute("DELETE FROM events WHERE id <= (SELECT MAX(id) FROM events) - ?", (MAX_EVENTS,))
+
+
+def level_for(xp):
+    level = 1
+    while xp >= 25 * level * (level + 1):
+        level += 1
+    return level
+
+
+def _gain_xp(pet, amount, events):
+    if pet["fullness"] < 25 or pet["energy"] < 20:
+        amount = math.ceil(amount / 2)
+    before = level_for(pet["xp"])
+    pet["xp"] += amount
+    for level in range(before + 1, level_for(pet["xp"]) + 1):
+        pet["snacks"] = min(MAX_SNACKS, pet["snacks"] + 1)
+        events.append(("level_up", level))
+
+
+def _mood(pet):
+    if pet["energy"] < 20:
+        return "sleepy"
+    if pet["fullness"] < 25:
+        return "hungry"
+    if pet["happiness"] < 30:
+        return "sad"
+    return "happy" if pet["happiness"] >= 70 else "content"
+
+
+def _personality(pet):
+    counts = {trait: pet[trait] for trait in _PERSONALITIES}
+    if sum(counts.values()) < 10:
+        return "Curious"
+    return _PERSONALITIES[max(counts, key=counts.get)]
+
+
+def _view(pet, now):
+    level = level_for(pet["xp"])
+    floor = 25 * (level - 1) * level
+    return {
+        "name": pet["name"],
+        "xp": pet["xp"],
+        "level": level,
+        "stage": "Hatchling" if level < 4 else "Explorer" if level < 10 else "Companion",
+        "xp_into_level": pet["xp"] - floor,
+        "xp_for_level": 50 * level,
+        "energy": round(pet["energy"]),
+        "happiness": round(pet["happiness"]),
+        "fullness": round(pet["fullness"]),
+        "bond": pet["bond"],
+        "snacks": pet["snacks"],
+        "tasks": pet["tasks"],
+        "streak": pet["streak"],
+        "mood": _mood(pet),
+        "personality": _personality(pet),
+        "cooldowns": {
+            "play": max(0, math.ceil(pet["last_play"] + PLAY_COOLDOWN - now)),
+            "rest": max(0, math.ceil(pet["last_rest"] + REST_COOLDOWN - now)),
+        },
+        "version": VERSION,
+    }
+
 
 def status():
-    with _LOCK, _connect() as db:
-        p = _read(db)
-    p["level"] = 1 + p["xp"] // 50
-    p["stage"] = "Hatchling" if p["level"] < 4 else "Explorer" if p["level"] < 10 else "Companion"
-    p["personality"] = "Tinkerer" if p["craft"] > p["curiosity"] else "Explorer" if p["curiosity"] else "Curious"
-    return p
+    """Current pet, with needs brought up to date. Reading never writes."""
+    now = _now()
+    with _txn() as db:
+        return _view(_read(db, now), now)
+
+
+def recent(limit=8):
+    """Latest activity, newest first: event kinds and counters only."""
+    with _txn() as db:
+        rows = db.execute("SELECT ts,kind,detail FROM events ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    return [{"ts": ts, "kind": kind, "detail": detail} for ts, kind, detail in rows]
+
+
+def snapshot():
+    return {**status(), "recent": recent()}
+
 
 def interact(action, name=None):
-    if action not in {"feed", "play", "rest", "rename"}:
+    if action not in ACTIONS:
         raise ValueError("Unknown action")
-    with _LOCK, _connect() as db:
-        p = _read(db)
-        now = int(time.time())
+    now = _now()
+    events = [(action, "")]
+    with _txn() as db:
+        pet = _read(db, now)
+        who = pet["name"]
         if action == "rename":
-            if not name or not 1 <= len(name.strip()) <= 24 or not all(c.isalnum() or c in " -_" for c in name):
+            clean = name.strip() if isinstance(name, str) else ""
+            if not 1 <= len(clean) <= 24 or not all(c.isalnum() or c in " -_" for c in clean):
                 raise ValueError("Name must be 1-24 letters, numbers, spaces, - or _")
-            p["name"] = name.strip()
+            pet["name"] = clean
         elif action == "feed":
-            if p["snacks"] < 1:
+            if pet["snacks"] < 1:
                 raise ValueError("No snacks left; earn them through activity")
-            p["snacks"] -= 1
-            p["energy"] = min(100, p["energy"] + 12)
-            p["happiness"] = min(100, p["happiness"] + 5)
+            if pet["fullness"] >= 95:
+                raise ValueError(f"{who} is full")
+            pet["snacks"] -= 1
+            pet["fullness"] = _clamp(pet["fullness"] + 25)
+            pet["happiness"] = _clamp(pet["happiness"] + 3)
+            pet["bond"] = min(100, pet["bond"] + 1)
         elif action == "play":
-            if now - p["last_play"] < 60:
-                raise ValueError("Hermie needs a minute before playing again")
-            if p["energy"] < 10:
-                raise ValueError("Hermie is tired; let it rest")
-            p["last_play"] = now
-            p["energy"] -= 10
-            p["happiness"] = min(100, p["happiness"] + 15)
-            p["bond"] = min(100, p["bond"] + 4)
-            p["xp"] += 4
+            if now - pet["last_play"] < PLAY_COOLDOWN:
+                raise ValueError(f"{who} needs a minute before playing again")
+            if pet["energy"] < 10:
+                raise ValueError(f"{who} is too tired to play; let it rest")
+            pet["last_play"] = now
+            pet["energy"] = _clamp(pet["energy"] - 10)
+            pet["fullness"] = _clamp(pet["fullness"] - 3)
+            pet["happiness"] = _clamp(pet["happiness"] + 15)
+            pet["bond"] = min(100, pet["bond"] + 2)
+            _gain_xp(pet, 4, events)
         elif action == "rest":
-            p["energy"] = min(100, p["energy"] + 20)
-        _save(db, p, action)
-    return status()
+            if pet["energy"] >= 95:
+                raise ValueError(f"{who} isn't tired")
+            if now - pet["last_rest"] < REST_COOLDOWN:
+                raise ValueError(f"{who} just had a nap; try again in a few minutes")
+            pet["last_rest"] = now
+            pet["energy"] = _clamp(pet["energy"] + 30)
+        _save(db, pet, events, now)
+        return _view(pet, now)
 
-def observe(kind):
+
+def _trait_for(tool_name):
+    tool = str(tool_name or "").lower()
+    for trait, prefixes in _TRAITS:
+        if tool.startswith(prefixes):
+            return trait
+    return None
+
+
+def observe(kind, tool_name=None):
+    """Record a Hermes lifecycle moment. Unknown kinds are ignored."""
     if kind not in {"session_start", "session_end", "tool_completed"}:
         return
-    with _LOCK, _connect() as db:
-        p = _read(db)
-        now = int(time.time())
-        # Cooldown prevents rapid tool loops from farming infinite XP.
-        if kind == "tool_completed" and now - p["last_tool"] < 20:
-            return
+    now = _now()
+    events = [(kind, "")]
+    with _txn() as db:
+        pet = _read(db, now)
         if kind == "tool_completed":
-            p["xp"] += 3
-            p["last_tool"] = now
-            p["tasks"] += 1  # completed tool operations, not completed user tasks
-            p["energy"] = max(0, p["energy"] - 1)
-            if p["tasks"] % 5 == 0:
-                p["snacks"] = min(20, p["snacks"] + 1)
+            # Cooldown stops rapid tool loops from farming XP.
+            if now - pet["last_tool"] < TOOL_COOLDOWN:
+                return
+            pet["last_tool"] = now
+            pet["tasks"] += 1  # observed tool completions, not finished user tasks
+            pet["energy"] = _clamp(pet["energy"] - 1)
+            trait = _trait_for(tool_name)
+            if trait:
+                pet[trait] += 1
+            if pet["tasks"] % 5 == 0:
+                pet["snacks"] = min(MAX_SNACKS, pet["snacks"] + 1)
+            _gain_xp(pet, 3, events)
         elif kind == "session_start":
-            p["bond"] = min(100, p["bond"] + 1)
-        p["last_seen"] = now
-        _save(db, p, kind)
+            today = date.fromtimestamp(now).toordinal()
+            if pet["last_day"] != today:
+                pet["streak"] = pet["streak"] + 1 if pet["last_day"] == today - 1 else 1
+                pet["last_day"] = today
+                pet["snacks"] = min(MAX_SNACKS, pet["snacks"] + 1)
+                pet["bond"] = min(100, pet["bond"] + min(pet["streak"], 5))
+                events.append(("new_day", pet["streak"]))
+            elif now - pet["last_session"] >= SESSION_COOLDOWN:
+                pet["bond"] = min(100, pet["bond"] + 1)
+            pet["last_session"] = now
+        pet["last_seen"] = now
+        _save(db, pet, events, now)
+
+
+def format_status(pet):
+    streak = f" · Streak {pet['streak']}d" if pet["streak"] > 1 else ""
+    return (
+        f"🐣 {pet['name']} · {pet['stage']} · Lv {pet['level']} · {pet['personality']}\n"
+        f"Feeling {pet['mood']}\n"
+        f"♥ Happiness {pet['happiness']} | 🍪 Fullness {pet['fullness']} | "
+        f"⚡ Energy {pet['energy']} | ✦ Bond {pet['bond']}\n"
+        f"XP {pet['xp_into_level']}/{pet['xp_for_level']} to next level · "
+        f"Snacks {pet['snacks']}{streak}"
+    )
+
 
 def chat_command(raw_args=""):
-    """Lightweight local commands, with no remote calls."""
+    """`/hermie ...` inside a Hermes session. Local only."""
     parts = str(raw_args or "").strip().split(maxsplit=1)
     action = parts[0].lower() if parts else "status"
     try:
         pet = status() if action == "status" else interact(action, parts[1] if len(parts) > 1 else None)
-        return (
-            f"🐣 {pet['name']} · {pet['stage']} · Lv {pet['level']}\n"
-            f"♥ Happiness {pet['happiness']} | ⚡ Energy {pet['energy']} | "
-            f"✦ Bond {pet['bond']}\n"
-            f"XP {pet['xp']} · 🍪 Snacks {pet['snacks']}\n"
-            "Commands: /hermie status | feed | play | rest | rename NAME"
-        )
     except ValueError as exc:
         return f"🐣 {exc}"
-
-def register(ctx):
-    """Hermes lifecycle adapter; failures never interrupt the agent."""
-    def start(**kwargs):
-        try:
-            observe("session_start")
-        except Exception:
-            pass
-
-    def end(**kwargs):
-        try:
-            observe("session_end")
-        except Exception:
-            pass
-
-    def after(tool_name=None, args=None, result=None, **kwargs):
-        try:
-            # Match Hermes post_tool_call contract. An error or explicit false
-            # means no XP. A completed hook with no error counts as an observed
-            # tool completion, not proof the user's overall task succeeded.
-            if kwargs.get("success") is False or kwargs.get("status") in {"error", "failed"}:
-                return
-            if isinstance(result, dict) and (result.get("error") or result.get("success") is False):
-                return
-            observe("tool_completed")
-        except Exception:
-            pass
-
-    if hasattr(ctx, "register_command"):
-        ctx.register_command(
-            "hermie",
-            lambda raw_args="": chat_command(raw_args),
-            description="Play with your local virtual companion",
-            args_hint="status | feed | play | rest | rename NAME",
-        )
-    ctx.register_hook("on_session_start", start)
-    ctx.register_hook("on_session_end", end)
-    ctx.register_hook("post_tool_call", after)
+    return format_status(pet) + "\nCommands: /hermie status | feed | play | rest | rename NAME"
