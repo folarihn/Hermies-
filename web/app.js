@@ -1,6 +1,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
-let token = "";\nlet currentPet = null;
+let token = "";
+let currentPet = null;
 const hash = new URLSearchParams(location.hash.slice(1));
 if (hash.has("token")) {
   token = hash.get("token") || "";
@@ -11,7 +12,8 @@ if (hash.has("token")) {
 }
 const phrases = ["Nice to see you! ♡", "Let's make something!", "What a cozy day ✦", "I like it here!"];
 function message(s){ $("message").textContent = s; }
-function render(p){\n  currentPet = p;
+function render(p){
+  currentPet = p;
   $("pet-name").textContent = p.name;
   $("stage").textContent = p.stage.toUpperCase();
   $("level").textContent = "LVL " + String(p.level).padStart(2,"0");
