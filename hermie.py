@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(os.environ.get("HERMIE_HOME", str(Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "hermie")))
 _LOCK = threading.RLock()
-INITIAL = {"name": "Hermie", "xp": 0, "energy": 80, "happiness": 75, "bond": 0, "snacks": 3, "last_seen": 0, "last_play": 0, "tasks": 0, "curiosity": 0, "craft": 0}
+INITIAL = {"name": "Hermie", "xp": 0, "energy": 80, "happiness": 75, "bond": 0, "snacks": 3, "last_seen": 0, "last_tool": 0, "last_play": 0, "tasks": 0, "curiosity": 0, "craft": 0}
 
 def _connect():
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -74,7 +74,7 @@ def observe(kind):
         p = _read(db)
         now = int(time.time())
         # Cooldown prevents rapid tool loops from farming infinite XP.
-        if kind == "tool_completed" and now - p["last_seen"] < 20:
+        if kind == "tool_completed" and now - p["last_tool"] < 20:
             return
         if kind == "tool_completed":
             p["xp"] += 3
@@ -87,20 +87,56 @@ def observe(kind):
         p["last_seen"] = now
         _save(db, p, kind)
 
+def chat_command(raw_args=""):
+    """Lightweight local commands, with no remote calls."""
+    parts = str(raw_args or "").strip().split(maxsplit=1)
+    action = parts[0].lower() if parts else "status"
+    try:
+        pet = status() if action == "status" else interact(action, parts[1] if len(parts) > 1 else None)
+        return (
+            f"🐣 {pet['name']} · {pet['stage']} · Lv {pet['level']}\n"
+            f"♥ Happiness {pet['happiness']} | ⚡ Energy {pet['energy']} | "
+            f"✦ Bond {pet['bond']}\n"
+            f"XP {pet['xp']} · 🍪 Snacks {pet['snacks']}\n"
+            "Commands: /hermie status | feed | play | rest | rename NAME"
+        )
+    except ValueError as exc:
+        return f"🐣 {exc}"
+
 def register(ctx):
-    """Attach only to supported lifecycle hooks. Failures never affect Hermes."""
+    """Hermes lifecycle adapter; failures never interrupt the agent."""
     def start(**kwargs):
-        try: observe("session_start")
-        except Exception: pass
-    def end(**kwargs):
-        try: observe("session_end")
-        except Exception: pass
-    def after(*args, **kwargs):
         try:
-            # Only award progress for explicitly successful outcomes.
-            if kwargs.get("success") is True or kwargs.get("status") == "success":
-                observe("tool_completed")
-        except Exception: pass
+            observe("session_start")
+        except Exception:
+            pass
+
+    def end(**kwargs):
+        try:
+            observe("session_end")
+        except Exception:
+            pass
+
+    def after(tool_name=None, args=None, result=None, **kwargs):
+        try:
+            # Match Hermes post_tool_call contract. An error or explicit false
+            # means no XP. A completed hook with no error counts as an observed
+            # tool completion, not proof the user's overall task succeeded.
+            if kwargs.get("success") is False or kwargs.get("status") in {"error", "failed"}:
+                return
+            if isinstance(result, dict) and (result.get("error") or result.get("success") is False):
+                return
+            observe("tool_completed")
+        except Exception:
+            pass
+
+    if hasattr(ctx, "register_command"):
+        ctx.register_command(
+            "hermie",
+            lambda raw_args="": chat_command(raw_args),
+            description="Play with your local virtual companion",
+            args_hint="status | feed | play | rest | rename NAME",
+        )
     ctx.register_hook("on_session_start", start)
     ctx.register_hook("on_session_end", end)
     ctx.register_hook("post_tool_call", after)
