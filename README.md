@@ -10,7 +10,7 @@ Hermie is an early open-source Hermes plugin. It stores a pet locally in SQLite,
 - Hatchling → Explorer → Companion stages
 - Session start/end hooks and conservative tool-completion observation
 - A 20-second XP cooldown to prevent farming from rapid tool calls
-- CLI actions for feeding, playing, resting and renaming\n- Local browser game with animated CSS pixel pet, mood meters, interactions, and SVG companion-card export\n- Hermes chat command: `/hermie status|feed|play|rest|rename NAME` (requires host support)
+- CLI actions for feeding, playing, resting and renaming\n- Local browser game with animated CSS pixel pet, mood meters, interactions, a star-catching mini-game, clickable room objects, and SVG companion-card export\n- Hermes chat command: `/hermie status|feed|play|rest|rename NAME` (requires host support)
 - No network calls or telemetry in the pet engine
 
 **Important:** XP for tool completion is awarded when Hermes emits `post_tool_call`, unless the result explicitly indicates an error. This is an observed tool operation, not proof of task success. Hermes host versions may represent outcomes differently; integration verification is still required. The `tasks` field counts observed successful tool operations, not completed user tasks.
@@ -40,7 +40,7 @@ python hermie_cli.py rename Pixel
 
 State lives in `$HERMIE_HOME/pet.sqlite3` if set, otherwise `$HERMES_HOME/hermie/pet.sqlite3`, otherwise `~/.hermes/hermie/pet.sqlite3`. No external Python dependencies are required.
 
-## Roadmap
+## Test checklist\n\nRun `python -m unittest discover -s tests -v` and `node --check web/app.js`. Then start `python hermie_web.py` and open the tokenized URL from the terminal. Verify feeding, play cooldown, rest, renaming, pet card export, clicking the plant, and catching five stars. Restart the server and confirm pet progress persists. Test `/hermie status` separately inside Hermes. The browser mini-game is cosmetic and does not award XP, preventing easy reward farming.\n\n## Roadmap
 
 - Verify Hermes lifecycle hook payloads on supported host versions
 - Add chat commands and a small browser-based pixel-art home
