@@ -14,6 +14,10 @@ except ImportError:  # run from a checkout (tests, local scripts)
     import hermie_cli
 
 
+# Unattended runs: a pet line has no reader there and would pollute the output.
+_SILENT_PLATFORMS = {"cron", "batch", "webhook", "api_server"}
+
+
 def tool_succeeded(**kwargs):
     """Did this post_tool_call describe a tool that actually ran cleanly?
 
@@ -56,6 +60,26 @@ def register(ctx):
         except Exception:
             pass
 
+    def transform_llm_output(response_text="", **kwargs):
+        # Now and then Hermie adds a line of its own under the agent's reply.
+        try:
+            if not response_text or kwargs.get("platform") in _SILENT_PLATFORMS:
+                return None
+            line = engine.say()
+            return f"{response_text}\n\n{line}" if line else None
+        except Exception:
+            return None
+
+    def pre_llm_call(**kwargs):
+        # Rarely, Hermie says something to the agent itself.
+        try:
+            if kwargs.get("platform") in _SILENT_PLATFORMS or kwargs.get("parent_session_id"):
+                return None
+            aside = engine.whisper()
+            return {"context": aside} if aside else None
+        except Exception:
+            return None
+
     def slash(raw_args="", **kwargs):
         try:
             return engine.chat_command(raw_args)
@@ -65,12 +89,17 @@ def register(ctx):
     ctx.register_hook("on_session_start", on_session_start)
     ctx.register_hook("on_session_end", on_session_end)
     ctx.register_hook("post_tool_call", post_tool_call)
+    for name, hook in (("transform_llm_output", transform_llm_output), ("pre_llm_call", pre_llm_call)):
+        try:  # speech is a bonus: an older host without these hooks still gets the pet
+            ctx.register_hook(name, hook)
+        except Exception:
+            pass
     if hasattr(ctx, "register_command"):
         ctx.register_command(
             "hermie",
             slash,
             description="Check on and care for your local companion",
-            args_hint="status | feed | play | rest | rename NAME",
+            args_hint="status | quiet | chatty | feed | play | rest | rename NAME",
         )
     if hasattr(ctx, "register_cli_command"):
         ctx.register_cli_command(

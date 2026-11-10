@@ -1,6 +1,6 @@
 """Hermie from a terminal.
 
-Inside Hermes:      hermes hermie [status|feed|play|rest|rename NAME|log|web]
+Inside Hermes:      hermes hermie [status|quiet|chatty|rename NAME|feed|play|rest|log|web]
 From a checkout:    python hermie_cli.py [same arguments]
 """
 from __future__ import annotations
@@ -20,6 +20,10 @@ _LABELS = {
     "play": "Played together",
     "rest": "Took a nap",
     "rename": "Got a new name",
+    "ate": "Helped itself to a snack",
+    "napped": "Dozed off for a nap",
+    "quiet": "Went quiet",
+    "chatty": "Got chatty again",
     "tool_completed": "Watched a tool finish",
     "session_start": "Session started",
     "session_end": "Session ended",
@@ -30,7 +34,7 @@ _LABELS = {
 
 def setup_parser(parser):
     parser.add_argument("action", nargs="?", default="status",
-                        choices=["status", "feed", "play", "rest", "rename", "log", "web"])
+                        choices=["status", "feed", "play", "rest", "rename", "quiet", "chatty", "log", "web"])
     parser.add_argument("name", nargs="?", help="new name, for rename")
     parser.add_argument("--json", action="store_true", help="print raw JSON")
     parser.add_argument("--port", type=int, default=None, help="port for the web home")

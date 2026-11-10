@@ -2,40 +2,48 @@
 
 **A tiny virtual companion that grows with your Hermes agent.**
 
-Hermie is a plugin for [Hermes Agent](https://hermes-agent.nousresearch.com). It keeps a pixel-art pet on your machine that earns XP while your agent works, gets hungry while you are away, and grows from a Hatchling into an Explorer and then a Companion.
+Hermie is a plugin for [Hermes Agent](https://hermes-agent.nousresearch.com). It keeps a pixel-art pet beside your agent. The pet lives off the agent's activity, looks after itself, now and then says something to you or to the agent, and grows from a Hatchling into an Explorer and then a Companion. You never have to do anything for it.
 
 Everything is local: one SQLite file, no network calls, no telemetry. Hermie stores counters and event kinds only. It never stores chat text, tool names, tool arguments or tool output.
 
 ## Install
 
-Requires Python 3.11+ and Hermes Agent 0.20 or newer.
+Requires Python 3.11+ and Hermes Agent 0.19 or newer.
 
 ```bash
 hermes plugins install folarihn/Hermies- --enable
 ```
 
-Restart Hermes. Your pet hatches the first time a session starts.
+Restart Hermes (recent versions load it straight into a running gateway). Your pet hatches the first time a session starts.
+
+## What it does on its own
+
+**It eats your agent's work.** Every tool call that finishes cleanly feeds the pet, cheers it up and earns 3 XP, at most once every 20 seconds so tool loops cannot farm it. Errored and blocked calls earn nothing. Every fifth tool and every level-up adds a snack to its jar.
+
+**It looks after itself.** When it gets hungry it raids the snack jar. When it gets tired it naps. Fullness and happiness drain slowly while your agent is idle, so after a long gap it greets you hungry and perks up as work resumes. Nothing ever dies.
+
+**It talks to you.** Occasionally a short line appears under one of the agent's replies, such as `🐣 Hermie: I counted the tools. There were a lot of tools.` It speaks at most once every 45 minutes, and not every time. Milestones are always announced: a new day's streak, a level-up, growing into a new stage.
+
+**It talks to the agent.** At most once every three hours the agent is passed one short line from the pet, marked as just for fun and not to affect the task. The agent may answer it in a playful aside or ignore it.
+
+**It grows.** Each level needs 50 XP more than the one before. Hatchling until level 4, Explorer until level 10, then Companion, each with its own sprite. Personality follows what your agent does most: building things makes a Tinkerer, research makes a Scholar, and messaging and delegating make a Socialite.
+
+**Honest limits.** XP reflects tool calls that Hermes reported as `ok`. That is not proof your task succeeded. The pet's lines are canned, not generated, so they cost no model tokens; the line passed to the agent adds a few dozen tokens a few times a day. Unattended runs (cron, batch, webhooks) and subagents never get pet lines.
 
 ## Where Hermie lives
 
 | Where | How |
 | --- | --- |
-| In a chat session | `/hermie`, `/hermie feed`, `/hermie play`, `/hermie rest`, `/hermie rename Pixel` |
-| In your terminal | `hermes hermie`, plus `feed`, `play`, `rest`, `rename NAME`, `log`, `--json` |
+| In a chat session | `/hermie` shows how it is doing |
+| In your terminal | `hermes hermie`, plus `log` and `--json` |
 | In the Hermes dashboard | A **Hermie** tab with the animated room (`hermes dashboard`) |
 | On its own page | `hermes hermie web` prints a private local link |
 
-## How the game works
+Optional commands, in chat (`/hermie ...`) or the terminal (`hermes hermie ...`):
 
-**Earning.** A tool call that finishes cleanly earns 3 XP, at most once every 20 seconds, so tool loops cannot farm it. Errored and blocked tool calls earn nothing. Every fifth tool earns a snack. Your first session of each day adds to a streak, a snack and some bond.
-
-**Needs.** Fullness and happiness drain slowly while you are away (a full pet is hungry after about a day). Energy comes back on its own and is spent by playing and working. Nothing ever dies: a hungry or exhausted pet just earns XP at half speed until you look after it.
-
-**Caring.** Feed spends a snack. Play costs energy and has a one-minute cooldown. Rest restores energy and has a ten-minute cooldown.
-
-**Growing.** Each level needs 50 XP more than the one before. Hatchling until level 4, Explorer until level 10, then Companion, each with its own sprite. Personality follows what your agent does most: building things makes a Tinkerer, research makes a Scholar, and messaging and delegating make a Socialite.
-
-**Honest limits.** XP reflects tool calls that Hermes reported as `ok`. That is not proof your task succeeded. The star-catching mini-game is cosmetic and awards nothing.
+- `quiet` stops the pet talking to you and the agent; `chatty` turns it back on.
+- `rename NAME` gives it a name.
+- `feed`, `play` and `rest` still work if you feel like fussing over it.
 
 ## Where state is stored
 
