@@ -46,14 +46,15 @@ class AdapterTests(unittest.TestCase):
         hermie_plugin.register(self.ctx)
 
     def test_registers_hooks_and_commands(self):
-        self.assertEqual(set(self.ctx.hooks), {"on_session_start", "on_session_end", "post_tool_call"})
+        self.assertEqual(set(self.ctx.hooks), {"on_session_start", "on_session_end", "post_tool_call",
+                                              "transform_llm_output", "pre_llm_call"})
         self.assertIn("hermie", self.ctx.commands)
         self.assertIn("hermie", self.ctx.cli)
 
     def test_works_on_a_host_without_commands(self):
         ctx = HooksOnlyContext()
         hermie_plugin.register(ctx)
-        self.assertEqual(len(ctx.hooks), 3)
+        self.assertEqual(len(ctx.hooks), 5)
 
     def test_ok_tool_is_observed_with_its_name(self):
         with patch.object(hermie, "observe") as observed:

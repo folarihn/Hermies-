@@ -143,6 +143,7 @@
 
   const EVENT_LABELS = {
     feed: "Had a snack", play: "Played together", rest: "Took a nap", rename: "Got a new name",
+    ate: "Helped itself to a snack", napped: "Dozed off for a nap", quiet: "Went quiet", chatty: "Got chatty again",
     tool_completed: "Watched a tool finish", session_start: "Session started", session_end: "Session ended",
     level_up: "Reached level {}", new_day: "Day {} of the streak",
   };
@@ -216,7 +217,7 @@
     const renameButton = h("button", { type: "button", text: "Rename" });
     const exportButton = h("button", { class: "hm-export", type: "button", text: "✦ Export companion card" });
     const feed = h("ul", { class: "hm-feed" });
-    const message = h("p", { class: "hm-message", role: "status", text: "Your little companion is waiting." });
+    const message = h("p", { class: "hm-message", role: "status", text: "Your companion looks after itself. These are just for fun." });
 
     const panel = h("div", { class: "hm-panel" },
       h("div", { class: "hm-between" }, h("span", { class: "hm-eyebrow", text: "YOUR COMPANION" }), stageEl),

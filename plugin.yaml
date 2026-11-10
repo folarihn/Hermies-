@@ -1,8 +1,10 @@
 name: hermie
-version: "0.3.0"
+version: "0.4.0"
 description: A tiny local companion that grows with your Hermes agent
 author: folarihn
 provides_hooks:
   - on_session_start
   - on_session_end
   - post_tool_call
+  - transform_llm_output
+  - pre_llm_call

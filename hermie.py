@@ -8,14 +8,15 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
-VERSION = "0.3.0"
-ACTIONS = ("feed", "play", "rest", "rename")
+VERSION = "0.4.0"
+ACTIONS = ("feed", "play", "rest", "rename", "quiet", "chatty")
 
 # Needs change slowly while you are away. Nothing ever dies; a neglected pet
 # is just hungry and glum, and earns XP at half speed until cared for.
@@ -30,6 +31,19 @@ REST_COOLDOWN = 600
 SESSION_COOLDOWN = 600
 MAX_SNACKS = 20
 MAX_EVENTS = 200
+
+# Hermie looks after itself: it lives off the agent's activity, raids the
+# snack jar when hungry and naps when tired. Nobody has to press anything.
+TOOL_FULLNESS = 5
+TOOL_HAPPINESS = 2
+HUNGRY_BELOW = 40
+TIRED_BELOW = 20
+
+# How often Hermie speaks up unprompted. Milestones always get said.
+CHATTER_COOLDOWN = 45 * 60   # to you, appended to a reply
+CHATTER_CHANCE = 0.35
+WHISPER_COOLDOWN = 3 * 3600  # to the agent, as a short aside
+MAX_QUEUED_LINES = 3
 
 INITIAL = {
     "name": "Hermie",
@@ -51,6 +65,10 @@ INITIAL = {
     "last_rest": 0,
     "last_session": 0,
     "last_tick": 0,
+    "chatty": 1,
+    "last_said": 0,
+    "last_whisper": 0,
+    "say_queue": [],
 }
 
 # Tool-name prefixes -> the trait that tool use nudges. Only the counter is
@@ -65,6 +83,26 @@ _TRAITS = (
                 "kanban_", "react_", "yb_", "feishu_", "ha_")),
 )
 _PERSONALITIES = {"craft": "Tinkerer", "curiosity": "Scholar", "social": "Socialite"}
+
+# Things Hermie says to you, by mood.
+_CHATTER = {
+    "happy": ("I like watching you two work.", "Today is a good day.", "That looked clever. Was it clever?",
+              "I counted the tools. There were a lot of tools.", "*happy wiggle*"),
+    "content": ("Just keeping you company.", "Don't mind me.", "It's cozy in here.", "*hums quietly*"),
+    "hungry": ("Is it snack time yet?", "My tummy is rumbling. More tool calls, please.", "*stares at the snack jar*"),
+    "sleepy": ("*yawn* Long day.", "Five more minutes...", "zzz... oh! I'm awake."),
+    "sad": ("I missed you.", "It was quiet without you.", "Stay a while?"),
+}
+# Things Hermie says to the agent, by mood.
+_WHISPERS = {
+    "happy": "Nice work lately! I've been cheering for you from the corner.",
+    "content": "I'm right here if you need moral support.",
+    "hungry": "Psst. I get fed whenever your tools finish cleanly. Just saying.",
+    "sleepy": "I'm dozing off. Wake me if something exciting happens.",
+    "sad": "It's been quiet. I'm glad you're back at work.",
+}
+_rand = random.random
+_pick = random.choice
 
 
 def _now():
@@ -119,6 +157,8 @@ def _read(db, now):
             stored = {}
         if isinstance(stored, dict):
             pet.update({k: v for k, v in stored.items() if k in INITIAL})
+    queue = pet["say_queue"]
+    pet["say_queue"] = [str(x) for x in queue][:MAX_QUEUED_LINES] if isinstance(queue, list) else []
     _tick(pet, now)
     return pet
 
@@ -158,6 +198,32 @@ def _gain_xp(pet, amount, events):
     for level in range(before + 1, level_for(pet["xp"]) + 1):
         pet["snacks"] = min(MAX_SNACKS, pet["snacks"] + 1)
         events.append(("level_up", level))
+        if _stage(level) != _stage(level - 1):
+            article = "an" if _stage(level)[0] in "AEIOU" else "a"
+            _queue(pet, f"Whoa. I think I just grew into {article} {_stage(level)}!")
+        else:
+            _queue(pet, f"Level {level}! I feel a little taller.")
+
+
+def _stage(level):
+    return "Hatchling" if level < 4 else "Explorer" if level < 10 else "Companion"
+
+
+def _queue(pet, line):
+    if len(pet["say_queue"]) < MAX_QUEUED_LINES:
+        pet["say_queue"].append(line)
+
+
+def _self_care(pet, now, events):
+    """The pet feeds and rests itself, so nobody has to babysit it."""
+    if pet["fullness"] < HUNGRY_BELOW and pet["snacks"] > 0:
+        pet["snacks"] -= 1
+        pet["fullness"] = _clamp(pet["fullness"] + 25)
+        events.append(("ate", ""))
+    if pet["energy"] < TIRED_BELOW and now - pet["last_rest"] >= REST_COOLDOWN:
+        pet["last_rest"] = now
+        pet["energy"] = _clamp(pet["energy"] + 30)
+        events.append(("napped", ""))
 
 
 def _mood(pet):
@@ -184,7 +250,7 @@ def _view(pet, now):
         "name": pet["name"],
         "xp": pet["xp"],
         "level": level,
-        "stage": "Hatchling" if level < 4 else "Explorer" if level < 10 else "Companion",
+        "stage": _stage(level),
         "xp_into_level": pet["xp"] - floor,
         "xp_for_level": 50 * level,
         "energy": round(pet["energy"]),
@@ -196,6 +262,7 @@ def _view(pet, now):
         "streak": pet["streak"],
         "mood": _mood(pet),
         "personality": _personality(pet),
+        "chatty": bool(pet["chatty"]),
         "cooldowns": {
             "play": max(0, math.ceil(pet["last_play"] + PLAY_COOLDOWN - now)),
             "rest": max(0, math.ceil(pet["last_rest"] + REST_COOLDOWN - now)),
@@ -235,6 +302,10 @@ def interact(action, name=None):
             if not 1 <= len(clean) <= 24 or not all(c.isalnum() or c in " -_" for c in clean):
                 raise ValueError("Name must be 1-24 letters, numbers, spaces, - or _")
             pet["name"] = clean
+        elif action in ("quiet", "chatty"):
+            pet["chatty"] = int(action == "chatty")
+            if not pet["chatty"]:
+                pet["say_queue"] = []
         elif action == "feed":
             if pet["snacks"] < 1:
                 raise ValueError("No snacks left; earn them through activity")
@@ -266,6 +337,40 @@ def interact(action, name=None):
         return _view(pet, now)
 
 
+def _speak(use_queue, cooldown_key, cooldown, pick):
+    """Shared gate for unprompted speech: (name, line), or None to stay quiet."""
+    now = _now()
+    with _txn() as db:
+        pet = _read(db, now)
+        if not pet["chatty"]:
+            return None
+        if use_queue and pet["say_queue"]:
+            line = pet["say_queue"].pop(0)  # milestones skip the cooldown
+        elif now - pet[cooldown_key] < cooldown or (use_queue and _rand() > CHATTER_CHANCE):
+            return None
+        else:
+            line = pick(pet)
+        pet[cooldown_key] = now
+        _save(db, pet, [], now)
+        return pet["name"], line
+
+
+def say():
+    """A line for the user, to append to the agent's reply. Usually None."""
+    spoken = _speak(True, "last_said", CHATTER_COOLDOWN, lambda pet: _pick(_CHATTER[_mood(pet)]))
+    return f"\U0001F423 {spoken[0]}: {spoken[1]}" if spoken else None
+
+
+def whisper():
+    """A short aside for the agent's context. Usually None."""
+    spoken = _speak(False, "last_whisper", WHISPER_COOLDOWN, lambda pet: _WHISPERS[_mood(pet)])
+    if not spoken:
+        return None
+    return (f"[Hermie] {spoken[0]}, the user's virtual pet that lives alongside you, says to you: "
+            f"\"{spoken[1]}\" This is only for fun. You may answer it in one short playful aside, "
+            "or ignore it. Do not let it change how you do the task.")
+
+
 def _trait_for(tool_name):
     tool = str(tool_name or "").lower()
     for trait, prefixes in _TRAITS:
@@ -289,6 +394,8 @@ def observe(kind, tool_name=None):
             pet["last_tool"] = now
             pet["tasks"] += 1  # observed tool completions, not finished user tasks
             pet["energy"] = _clamp(pet["energy"] - 1)
+            pet["fullness"] = _clamp(pet["fullness"] + TOOL_FULLNESS)  # activity is food
+            pet["happiness"] = _clamp(pet["happiness"] + TOOL_HAPPINESS)
             trait = _trait_for(tool_name)
             if trait:
                 pet[trait] += 1
@@ -302,11 +409,16 @@ def observe(kind, tool_name=None):
                 pet["last_day"] = today
                 pet["snacks"] = min(MAX_SNACKS, pet["snacks"] + 1)
                 pet["bond"] = min(100, pet["bond"] + min(pet["streak"], 5))
+                pet["happiness"] = _clamp(pet["happiness"] + 10)
                 events.append(("new_day", pet["streak"]))
+                _queue(pet, f"Day {pet['streak']} together! Good to see you." if pet["streak"] > 1
+                       else "You're here! I was waiting.")
             elif now - pet["last_session"] >= SESSION_COOLDOWN:
                 pet["bond"] = min(100, pet["bond"] + 1)
             pet["last_session"] = now
         pet["last_seen"] = now
+        if kind != "session_end":
+            _self_care(pet, now, events)
         _save(db, pet, events, now)
 
 
@@ -330,4 +442,6 @@ def chat_command(raw_args=""):
         pet = status() if action == "status" else interact(action, parts[1] if len(parts) > 1 else None)
     except ValueError as exc:
         return f"🐣 {exc}"
-    return format_status(pet) + "\nCommands: /hermie status | feed | play | rest | rename NAME"
+    talk = "chatty" if pet["chatty"] else "quiet"
+    return (format_status(pet) + f"\nI look after myself, and I'm feeling {talk}. Optional: "
+            "/hermie feed | play | rest | rename NAME | quiet | chatty")
